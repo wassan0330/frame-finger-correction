@@ -1,16 +1,66 @@
 # Frame Finger Correction
 
-Steam Frame controller finger deadzone correction. See [Releases](https://github.com/wassan0330/frame-finger-correction/releases) for the preview and installation instructions.
+Steam Frameのコントローラーで、指を伸ばしてもアバターの指が曲がったままに見える症状を、指ごとのデッドゾーン補正で緩和します。補正はFrame本体で動作し、PCVRで使用する際もPC側の補正アプリは不要です。
 
-## Build the v0.1.0 preview on Steam Frame
+**Valve非公式の個人開発ツールです。** 導入前に下の対応環境と[注意事項・免責](#注意事項免責)をお読みください。
 
-This source builds the ARM64 UI, correction driver and dashboard registration helper. On the Frame, use its existing C++17 compiler, Cairo development files and Valve OpenVR headers/runtime:
+## できること
+
+- 左右の人差し指・中指・薬指・小指を個別に選び、手動または学習モードで補正する
+- ゴーグル内で補正のON/OFF、SteamVR自動起動、表示言語を切り替える
+- 補正値と言語設定を保存する。初期表示は日本語で、英語に切り替えられる
+
+## 対応環境
+
+Steam FrameのARM64版と、v0.1.0で検証した特定のSteamVRベータビルドが対象です。1台のFrameで、完全削除後に公開コマンドから再導入し、ゴーグル内で補正による改善を確認しました。別個体やすべてのSteamVRベータ版・安定版での動作は未確認です。互換性を確認できないビルドでは補正を有効にしません。
+
+## インストール
+
+1. [v0.1.0のリリースページ](https://github.com/wassan0330/frame-finger-correction/releases/tag/app-v0.1.0)を開きます。
+2. Frame側のSteamVRが動作している状態で、FrameのデスクトップモードからKonsoleを開き、リリースページの1行コマンドを実行します。
+3. 登録が完了したら、Frame側のSteamVRを通常再起動します。
+4. ゴーグルの **「＋」→「プログラムを起動」→「Frame Finger Correction」** から開きます。
+
+インストールに `sudo` は不要です。旧試作版のドライバーを登録している場合は、先に旧版の登録を解除してください。
+
+## 補正の使い方
+
+1. 曲がり残りがある指だけを補正対象にします。
+2. **手動**では、`＋` / `−` でデッドゾーンを調整します。指を伸ばしたときの曲がり残りが減り、曲げたときの反応が残る範囲で少しずつ調整してください。
+3. **学習モード**では、補正をONにし、対象の指を伸ばした状態で「学習」を押して約1.5秒間その姿勢を保ちます。
+4. 「補正設定」でON/OFFを切り替え、VR内で違いを確認します。「閉じる」でアプリを終了すると補正も止まります。
+
+次回からSteamVRと一緒に起動したい場合は、画面内の「SteamVR 自動起動」をONにします。自動起動と補正のON/OFFは別の設定です。
+
+## 困ったとき
+
+| 症状 | 確認すること |
+| --- | --- |
+| ダッシュボードに見当たらない | 「＋」→「プログラムを起動」から手動で開いてください。 |
+| SteamVRを更新したら補正できない | 未対応ビルドでは補正が停止します。対応状況はリリースページを確認してください。 |
+| 補正を入れると曲げにくい | 対象指のデッドゾーンを下げるか、その指を対象外にしてください。 |
+| 入力がおかしくなった | 補正をOFFにしてアプリを閉じてください。症状が続く場合はFrame側SteamVRを再起動してください。 |
+
+## アンインストール
+
+アプリを閉じ、Frame側SteamVRが動作している状態で、配布アーカイブを展開したフォルダから実行します。
+
+| 操作 | コマンド |
+| --- | --- |
+| 補正値・言語設定を残して削除 | `python3 stage-frame-release.py uninstall` |
+| 設定・ログも含めて完全削除 | `python3 stage-frame-release.py uninstall --purge` |
+
+## ソースからビルド
+
+公開済みv0.1.0を再ビルドする場合は、リリースの **Assets → `frame-finger-correction-v0.1.0-source.tar.gz`** を使ってください。GitHubが自動生成する同リリースの「Source code」アーカイブは、初回タグ時点のスナップショットです。
+
+Frame上のC++17コンパイラ、Cairoの開発ファイル、Valve OpenVRヘッダーとランタイムを使います。
 
 ```sh
 FRAME_FINGER_RELEASE=1 FRAME_FINGER_RUNTIME=november-beta sh scripts/build-frame-finger.sh
 ```
 
-The driver targets the exact verified November SteamVR beta binary pair. See Releases for installation and removal. The app is unofficial. The bundled Valve header has its own license in third_party/openvr-driver.
+出力先は `build/frame-finger/` です。自作部分は [MITライセンス](LICENSE)、同梱のValve OpenVRヘッダーは [個別のライセンス](third_party/openvr-driver/LICENSE)に従います。
 
 ## 注意事項・免責
 
