@@ -1,0 +1,6 @@
+#pragma once
+#if defined(FRAME_SCALAR_SUPERVISED_ON_CANDIDATE) || defined(FRAME_SCALAR_ALL_FINGERS_BETA)
+#define FRAME_SCALAR_ACTIVITY "correction=SEE_SUPERVISED_STATUS"
+#else
+#define FRAME_SCALAR_ACTIVITY "correction=OFF"
+#endif
