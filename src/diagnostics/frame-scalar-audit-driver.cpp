@@ -1,4 +1,7 @@
 #include <pwd.h>
+#if defined(FRAME_COMPAT_OBSERVATION_UI) && (!defined(FRAME_COMPAT_STRUCTURAL_AUDIT) || !defined(FRAME_SCALAR_STANDALONE_BETA) || !defined(FRAME_SCALAR_ALL_FINGERS_BETA) || !defined(FRAME_SCALAR_OFF_VTABLE_PROBE))
+#error Experimental observation requires the standalone structural-audit build
+#endif
 #if defined(FRAME_NOV_BETA_CANDIDATE) && defined(FRAME_SCALAR_CV_CACHE_AUDIT)
 #error November beta cv cache layout is unverified
 #endif
@@ -53,6 +56,12 @@
 #ifdef FRAME_SCALAR_OFF_VTABLE_PROBE
 #include "scalar-off-vtable-probe.hpp"
 #endif
+#ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
+#if !defined(FRAME_SCALAR_ALL_FINGERS_BETA)
+#error Structural audit needs the all-finger snapshot path filter
+#endif
+#include "runtime-facts.hpp"
+#endif
 
 namespace frame_scalar_audit {
 inline std::string statePath(const char* relative){
@@ -92,8 +101,8 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
         }
         close(fd);return count>0&&static_cast<size_t>(count)==body.size()?body:std::string{};
     }
-    static void writeBetaStatus(const std::string& content){
-        std::string path=statePath("settings-ui/beta-status.txt");
+    static void writeBetaStatus(const std::string& content, const char* relative="settings-ui/beta-status.txt"){
+        std::string path=statePath(relative);
         auto pattern=path+".tmp-XXXXXX";std::vector<char> tmp(pattern.begin(),pattern.end());tmp.push_back(0);
         int fd=mkstemp(tmp.data());if(fd<0)return;
         bool ok=write(fd,content.data(),content.size())==static_cast<ssize_t>(content.size());if(close(fd)!=0)ok=false;
@@ -121,6 +130,14 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
 #else
         frame_off_probe::allFingers.renew(profile,revision?revision:1,offProbe.active(),ui.observedMs,proof.issuedMs,now,betaLearnRow,betaLearnUntil);
 #endif
+        if(auto result=frame_off_probe::allFingers.takeLearningResult()){
+            char line[128]{};
+            std::snprintf(line,sizeof(line),"FrameFingerLearn: row=%u samples=%u result=%s",
+                result->row,result->samples,result->applied?"applied":"insufficient_samples");
+            logger->Log(line);
+            writeBetaStatus("FRAME_LEARN_RESULT_2 "+std::to_string(time(nullptr))+" "+betaLearnId+" "+std::to_string(result->row)+" "+
+                std::to_string(result->samples)+" "+(result->applied?"applied":"insufficient")+"\n","settings-ui/learn-result.txt");
+        }
         offProbe.renewVerifiedObserver();
     }
     void publishBeta(uint64_t now){
@@ -130,6 +147,10 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
         auto state=frame_off_probe::allFingers.status(now);
         std::ostringstream text;text<<"FRAME_BETA_STATUS_1 "<<time(nullptr)<<' '<<(state.on?"ON":"OFF")<<' '<<state.present<<' '<<state.witnessed<<' '<<state.learned<<'\n';
         writeBetaStatus(text.str());
+#if defined(FRAME_COMPAT_OBSERVATION_UI) && defined(FRAME_SCALAR_OFF_VTABLE_PROBE)
+        if(offProbe.restartRequired())writeBetaStatus("FRAME_COMPAT_STATUS_1 "+std::to_string(time(nullptr))+
+            " restore_failed restart_required\n","settings-ui/compat-status.txt");
+#endif
     }
 #endif
 
@@ -343,6 +364,190 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
            (role!=vr::TrackedControllerRole_LeftHand&&role!=vr::TrackedControllerRole_RightHand))return {};
         return {serial,role};
     }
+#ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
+    // Unknown layout: read-only structural audit, at most once per second for
+    // 12 attempts per provider. It never sets `backend`, so none of the
+    // observer/correction paths below can run; it only logs a verdict.
+    void* structuralInput=nullptr;
+    unsigned structuralAttempts=0;bool structuralDone=false,structuralHashed=false;
+    frame_runtime_facts::Hashes structuralHashes;
+    std::string structuralStatus;
+    std::chrono::steady_clock::time_point structuralNext{};
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+    frame_observation::Handles experimentalHandles{};
+    std::array<std::string,8> experimentalOwners{};
+    uintptr_t experimentalTable=0, experimentalEntry=0, experimentalBackend=0;
+    uint64_t experimentalUi=0;
+#endif
+    void structuralCensus(frame_compat_check::Facts& f
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+        , frame_observation::Handles* handles=nullptr, std::array<std::string,8>* owners=nullptr,
+          std::array<std::optional<frame_beta::Binding>,8>* bindings=nullptr
+#endif
+    ){
+        if(!host||!properties)return;
+        f.censusTaken=true;f.censusStable=true;
+        vr::TrackedDevicePose_t poses[64]{};host->GetRawTrackedDevicePoses(0,poses,64);
+        for(uint32_t index=0;index<64;++index){
+            if(!poses[index].bDeviceIsConnected)continue;
+            auto container=properties->TrackedDeviceToPropertyContainer(index);auto before=owner(container);
+            if(before.serial.empty())continue;
+            SelfMemoryReader reader;auto snapshot=frame_scalar::stableSnapshot(reader,f.backend,index);auto after=owner(container);
+            if(!snapshot.valid||before.serial!=after.serial||before.role!=after.role){f.censusStable=false;continue;}
+            const unsigned side=after.role==vr::TrackedControllerRole_LeftHand?0:1;
+            for(const auto& component:snapshot.components){
+                int finger=frame_beta::fingerForPath(component.path);
+                if(finger>=0&&component.units==0){
+                    const unsigned row=side*4+static_cast<unsigned>(finger);
+                    ++f.fingerCounts[row];
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+                    if(handles)(*handles)[row]=component.handle;
+                    if(owners)(*owners)[row]=after.serial+":"+std::to_string(component.nodeAddress);
+                    if(bindings){
+                        auto hand=side?frame_scalar::Hand::Right:frame_scalar::Hand::Left;
+                        (*bindings)[row]=frame_beta::Binding{
+                            {component.handle,container,component.path,after.serial,hand,true,true,0,false},
+                            {index,after.serial,"frame_controller",hand,true,0},component.nodeAddress};
+                    }
+#endif
+                }
+            }
+        }
+    }
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+    void experimentalTick(){
+        using namespace frame_observation;
+        const auto heartbeat=readBetaFile("ui-heartbeat.txt",160);
+        const auto now=frame_off_probe::observationMs();
+        frame_supervision::UiHeartbeat ui{};
+        const bool fresh=frame_supervision::parseHeartbeat(heartbeat,now,ui,1500);
+        const auto requested=[&](const char* file)->uint64_t{
+            auto body=readBetaFile(file,160);
+            std::istringstream input(body);std::string tag,extra;uint64_t session=0,stamp=0;
+            return fresh&&body.find('-')==std::string::npos&&(input>>tag>>session>>stamp)&&!(input>>extra)&&
+                tag=="FRAME_OBSERVE_1"&&session==ui.session&&stamp<=now&&now-stamp<1500?stamp:0;
+        };
+        const auto start=requested("observe-request.txt");
+        const auto activate=requested("observe-activate.txt");
+        const bool stop=requested("observe-stop.txt");
+        auto log=[this](const char* message){logger->Log(message);};
+        if(!offProbe.active()){
+            if(structuralStatus!="structurally_compatible none"||!start)return;
+            const auto hashes=frame_runtime_facts::hashRuntime();
+            frame_compat_check::Facts facts;
+            frame_runtime_facts::readStructure(structuralInput,facts);
+            if(!frame_compat_check::sha256Text(hashes.cv)||!std::any_of(facts.maps.begin(),facts.maps.end(),[](const auto& mapping){
+                return mapping.path==frame_runtime_facts::cvPath&&mapping.exec&&!mapping.write;
+            })){
+                structuralStatus="rejected cv_mapping_unavailable";
+                return;
+            }
+            facts.selfSha256=hashes.self;facts.serverSha256=hashes.server;facts.cvSha256=hashes.cv;
+            frame_compat_check::Result vouched;
+            if(auto reason=frame_compat_check::structuralCheck(facts,vouched);reason!=frame_compat_check::Reason::None){
+                structuralStatus=std::string("rejected ")+frame_compat_check::reasonName(reason);
+                return;
+            }
+            structuralCensus(facts,&experimentalHandles,&experimentalOwners);
+            const auto verdict=frame_compat_check::classify(facts,frame_runtime_facts::shippedProfiles());
+            if(verdict.verdict!=frame_compat_check::Verdict::StructurallyCompatible){
+                structuralStatus=std::string("rejected ")+frame_compat_check::reasonName(verdict.reason);
+                return;
+            }
+            const auto latestHeartbeat=readBetaFile("ui-heartbeat.txt",160);
+            const auto atAttach=frame_off_probe::observationMs();
+            frame_supervision::UiHeartbeat latest{};
+            if(!frame_supervision::parseHeartbeat(latestHeartbeat,atAttach,latest,1500)||
+               latest.session!=ui.session||atAttach<start||atAttach-start>=1500){
+                structuralStatus="rejected stale_consent";
+                return;
+            }
+            experimentalTable=facts.table;experimentalEntry=facts.slots[3];experimentalBackend=facts.backend;
+            experimentalUi=ui.session;
+            if(offProbe.beginObservation(experimentalTable,experimentalEntry,experimentalUi,experimentalHandles,log))
+                structuralStatus="observing 0";
+            else structuralStatus=offProbe.restartRequired()?"restore_failed restart_required":"rejected attach_failed";
+            return;
+        }
+        // Compare the live object/table/backend and fresh controller records,
+        // without running the pre-install classifier against our replaced slot.
+        SelfMemoryReader reader;
+        uintptr_t table=0,entry=0,backendNow=0;
+        auto object=reinterpret_cast<uintptr_t>(structuralInput);
+        frame_compat_check::Facts facts;facts.backend=experimentalBackend;
+        Handles handles{};std::array<std::string,8> owners{};
+        std::array<std::optional<frame_beta::Binding>,8> bindings{};
+        if(fresh&&reader.read(object,&table,8)&&table==experimentalTable&&
+           reader.read(table+24,&entry,8)&&entry==reinterpret_cast<uintptr_t>(&frame_off_probe::update)&&
+           reader.read(object+16,&backendNow,8)&&backendNow==experimentalBackend)
+            structuralCensus(facts,&handles,&owners,&bindings);
+        if(!facts.censusStable||owners!=experimentalOwners||
+           std::any_of(facts.fingerCounts.begin(),facts.fingerCounts.end(),[](auto count){return count!=1;}))
+            handles={};
+        bool restore=false,enabled=false,stopped=false;
+        Reason reason=Reason::None;
+        {
+            std::lock_guard<std::mutex> guard(frame_off_probe::observationMutex);
+            auto& trial=frame_off_probe::observation;
+            trial.check(fresh?ui.session:0,handles,frame_off_probe::observationMs());
+            if(stop)trial.stop();
+            else if(activate&&trial.verifiedAt()&&activate>=trial.verifiedAt())trial.activate(true,ui.session,handles,frame_off_probe::observationMs());
+            restore=trial.state()==State::RestorePending;
+            reason=trial.reason();
+            stopped=restore&&reason==Reason::None;
+            enabled=trial.state()==State::Active;
+            if(!restore)structuralStatus=std::string(enabled?"active ":trial.state()==State::Verified?"verified ":"observing ")+std::to_string(trial.witnessed());
+        }
+        if(restore){
+            offProbe.stop();
+            structuralStatus=offProbe.restartRequired()?"restore_failed restart_required":stopped?"stopped none":std::string("rejected ")+reasonCode(reason);
+            if(logger)logger->Log(("FrameCompat: "+structuralStatus).c_str());
+            std::lock_guard<std::mutex> guard(frame_off_probe::observationMutex);
+            frame_off_probe::observation.restored(!offProbe.restartRequired(),false);
+        }else if(enabled){
+            auto tick=frame_off_probe::observationMs();
+            frame_off_probe::allFingers.configure(bindings,tick);
+            uiFresh=fresh;
+            evaluateBeta(ui,frame_supervision::PcOffProof{},tick);
+            frame_off_probe::experimentalLease.store(ui.observedMs+1500,std::memory_order_release);
+            publishBeta(tick);
+        }
+    }
+#endif
+    void structuralTick(std::chrono::steady_clock::time_point now){
+        if(now<structuralNext)return;
+        structuralNext=now+std::chrono::seconds(1);
+#if defined(FRAME_COMPAT_OBSERVATION_UI) && defined(FRAME_SCALAR_ALL_FINGERS_BETA)
+        auto publish=[this]{
+            if(!structuralStatus.empty())writeBetaStatus("FRAME_COMPAT_STATUS_1 "+std::to_string(time(nullptr))+" "+structuralStatus+"\n",
+                "settings-ui/compat-status.txt");
+        };
+        if(structuralDone){
+            if(offProbe.active())structuralNext=now+std::chrono::milliseconds(250);
+            experimentalTick();publish();return;
+        }
+#else
+        if(structuralDone)return;
+#endif
+        if(!structuralHashed){structuralHashes=frame_runtime_facts::hashRuntime();structuralHashed=true;}
+        frame_compat_check::Facts f;frame_runtime_facts::readStructure(structuralInput,f);
+        f.selfSha256=structuralHashes.self;f.serverSha256=structuralHashes.server;f.cvSha256=structuralHashes.cv;
+        frame_compat_check::Result vouched;
+        // Follow the backend pointer only after the checks that vouch for it.
+        if(frame_compat_check::structuralCheck(f,vouched)==frame_compat_check::Reason::None)structuralCensus(f);
+        auto result=frame_compat_check::classify(f,frame_runtime_facts::shippedProfiles());
+        ++structuralAttempts;
+        using frame_compat_check::Reason;
+        const bool waiting=result.reason==Reason::CensusMissing||result.reason==Reason::CensusUnstable||result.reason==Reason::FingerMissing;
+        if(result.verdict==frame_compat_check::Verdict::Rejected&&waiting&&structuralAttempts<12)return;
+        structuralDone=true;
+#if defined(FRAME_COMPAT_OBSERVATION_UI) && defined(FRAME_SCALAR_ALL_FINGERS_BETA)
+        structuralStatus=std::string(frame_runtime_facts::verdictName(result.verdict))+" "+frame_compat_check::reasonName(result.reason);
+        publish();
+#endif
+        if(logger)logger->Log((frame_runtime_facts::formatVerdict("unknown_build",result,f,structuralAttempts)+"; no hooks; correction OFF").c_str());
+    }
+#endif
 #ifdef FRAME_SCALAR_CANDIDATE_SHADOW
     std::chrono::steady_clock::time_point nextShadow{};
     uint64_t shadowTicks=0,shadowMaxUs=0;
@@ -508,6 +713,10 @@ public:
                           slot,static_cast<unsigned long>(rva),rva==expected[slot]);
             emit(text);if(rva!=expected[slot])match=false;
         }
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+        if(match&&!frame_off_probe::knownExecutableFiles())match=false;
+        emit("FrameCompat: experimental-observation-v1");
+#endif
         // Matching offsets alone are not a runtime compatibility authorization.
         emit(match?"FrameScalarAudit: candidate layout matches; correction remains OFF":
                    "FrameScalarAudit: unknown layout/owner; audit inactive; correction OFF");
@@ -561,6 +770,19 @@ public:
                 }
             }
         }
+#ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
+        structuralInput=nullptr;structuralAttempts=0;structuralDone=false;structuralHashed=false;structuralNext={};structuralStatus.clear();
+        if(!backend&&log){
+            error=vr::VRInitError_None;
+            auto* props=static_cast<vr::IVRProperties*>(context->GetGenericInterface(vr::IVRProperties_Version,&error));
+            if(props&&error==vr::VRInitError_None){
+                error=vr::VRInitError_None;
+                auto* serverHost=static_cast<vr::IVRServerDriverHost*>(context->GetGenericInterface(vr::IVRServerDriverHost_Version,&error));
+                logger=log;properties=props;host=error==vr::VRInitError_None?serverHost:nullptr;structuralInput=input;
+                emit("FrameCompat: layout not known; read-only structural audit scheduled (max 12 attempts); no hooks; correction OFF");
+            }
+        }
+#endif
         return vr::VRInitError_None;
     }
     void Cleanup()override{
@@ -570,11 +792,26 @@ public:
 #ifdef FRAME_SCALAR_OFF_VTABLE_PROBE
         offProbe.stop();qualifiedInput=nullptr;
 #endif
+#ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
+        structuralInput=nullptr;structuralDone=true;
+#endif
         active=false;backend=0;properties=nullptr;logger=nullptr;host=nullptr;monitorUntil={};
     }
     const char* const* GetInterfaceVersions()override{return vr::k_InterfaceVersions;}
     void RunFrame()override{
         auto now=std::chrono::steady_clock::now();
+#ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
+        if(active&&!backend&&structuralInput){
+            try{structuralTick(now);}catch(...){
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+                offProbe.stop();
+                structuralStatus=offProbe.restartRequired()?"restore_failed restart_required":"rejected audit_error";
+#endif
+                structuralDone=true;
+            }
+            return;
+        }
+#endif
         if(!active||!backend||!properties||!logger)return;
 #ifdef FRAME_SCALAR_CANDIDATE_SHADOW
         try{

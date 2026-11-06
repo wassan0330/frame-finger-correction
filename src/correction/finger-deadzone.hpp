@@ -38,6 +38,11 @@ public:
         baseline+=std::clamp(input-baseline,-s.updatePerSecond*dt,s.updatePerSecond*dt);
         return true;
     }
+    bool setLearnedBaseline(double value,const DeadzoneSettings& s){
+        if(!s.enabled||s.mode!=DeadzoneMode::Dynamic||!valid(s)||
+           !std::isfinite(value)||value<0||value>s.maximum)return false;
+        baseline=value;acquired=true;return true;
+    }
     double map(double input,const DeadzoneSettings& s)const{
         if(!s.enabled||!valid(s)||!std::isfinite(input)||input<0||input>1||
            (s.mode==DeadzoneMode::Dynamic&&!acquired))return input;

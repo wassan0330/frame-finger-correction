@@ -38,5 +38,19 @@ public:
         if(!protect(false))return SlotResult::ProtectionFailure;
         return exchanged?SlotResult::Changed:SlotResult::UnexpectedValue;
     }
+    // Control thread only. Never replace a foreign pointer. When a failed
+    // restore already changed the slot, retry just the page protection.
+    template<class Protect>
+    SlotResult restoreBounded(Protect&& protect, bool protectionUncertain=false) {
+        for(unsigned attempt=0;attempt<3;++attempt){
+            auto result=restore(protect);
+            if(result==SlotResult::AlreadyOriginal&&protectionUncertain)
+                result=protect(false)?SlotResult::AlreadyOriginal:SlotResult::ProtectionFailure;
+            if(result!=SlotResult::ProtectionFailure)return result;
+            protectionUncertain=true;
+        }
+        return SlotResult::ProtectionFailure;
+    }
+
 };
 }

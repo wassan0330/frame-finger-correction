@@ -87,7 +87,7 @@ exec python3 -c 'import json,os,re; v=json.load(open("selection.json"))["current
     }))
 
 
-def driver_command(root, action, release=None):
+def driver_command(root, action, release=None, experimental=False):
     runtime = Path('/opt/steamvr')
     package = root / 'frame_finger_correction'
     tool = runtime / 'bin/linuxarm64/vrpathreg'
@@ -120,9 +120,14 @@ def driver_command(root, action, release=None):
     if len(matched) != 1:
         raise RuntimeError('Unknown driver runtime profile')
     hashes = dict(zip(('bin/linuxarm64/vrserver', 'drivers/cv/bin/linuxarm64/driver_cv.so'), matched[0]))
-    for relative, expected_hash in hashes.items():
-        if digest(runtime / relative) != expected_hash:
-            raise RuntimeError(f'Unsupported SteamVR: {relative}; no driver registered')
+    mismatches = [relative for relative, expected_hash in hashes.items()
+                  if digest(runtime / relative) != expected_hash]
+    if mismatches:
+        ui = source.with_name('frame-finger-settings-beta')
+        if (not experimental or b'FrameCompat: experimental-observation-v1' not in binary
+                or b'observe-activate.txt' not in ui.read_bytes()):
+            raise RuntimeError(f'Unsupported SteamVR: {mismatches[0]}; no driver registered')
+        print('Experimental build installed for structural checks only; observation requires VR consent')
     if package.exists():
         raise RuntimeError('Driver already staged; uninstall before replacing the driver')
     conflict = subprocess.run([tool, 'finddriver', 'frame_scalar_audit'], capture_output=True, timeout=15)
@@ -154,7 +159,10 @@ def main():
     parser.add_argument('--purge', action='store_true', help='Also remove release settings, logs and metadata')
     parser.add_argument('--dashboard', action='store_true', help='Register the release dashboard in running SteamVR')
     parser.add_argument('--driver', action='store_true', help='Register the verified release driver')
+    parser.add_argument('--experimental', action='store_true', help='Allow installation of the experimental build; does not start observation')
     args = parser.parse_args()
+    if args.experimental and (args.action != 'stage' or not args.driver):
+        parser.error('--experimental requires stage --driver')
     if args.driver and args.action != 'stage':
         parser.error('--driver requires stage')
     if args.dashboard and args.action != 'stage':
@@ -288,7 +296,7 @@ def main():
         dashboard_started = False
         try:
             if args.driver:
-                driver_command(root, 'register', release)
+                driver_command(root, 'register', release, args.experimental)
                 driver_added = True
             if selection.get('current') != release:
                 activate(root, {'current': release, 'previous': selection.get('current')})

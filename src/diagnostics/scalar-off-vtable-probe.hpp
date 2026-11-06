@@ -1,14 +1,21 @@
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+#include "../correction/frame-observation.hpp"
+#include <mutex>
+#endif
 #include "frame-runtime-profile.hpp"
 #include "../correction/scalar-activity-label.hpp"
 #pragma once
-// Experimental OFF-only candidate. It changes one shared vtable pointer only
-// after an explicit fresh request; there is NO correction-ON implementation.
+// Replaces one shared scalar vtable slot after authorization. The experimental
+// path initially forwards unchanged; only a separate verified activation permits correction.
 #include "self-memory-reader.hpp"
 #include "../correction/readonly-slot-transaction.hpp"
 #ifdef FRAME_SCALAR_ALL_FINGERS_BETA
 #include "../correction/frame-finger-bank.hpp"
 #endif
 #include "../correction/scalar-off-forwarding.hpp"
+#ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
+#include "runtime-facts.hpp"
+#endif
 #ifdef FRAME_SCALAR_CANDIDATE_SHADOW
 #include "../correction/scalar-shadow-bridge.hpp"
 #endif
@@ -61,9 +68,38 @@ inline void countUpdate(uint64_t handle,int32_t result){
 #ifdef FRAME_SCALAR_CANDIDATE_SHADOW
 inline frame_scalar::ScalarShadowBridge shadow;
 #endif
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+inline std::mutex observationMutex;
+inline frame_observation::Trial observation;
+inline std::atomic<bool> experimentalSlot{false};
+inline std::atomic<uint64_t> experimentalLease{0};
+inline uint64_t observationMs(){
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+#endif
 inline int32_t update(void* receiver,uint64_t component,float value,double offset){
     // Original is published before the table entry, and is never cleared.
     auto original=resident.original.load(std::memory_order_acquire);
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+    if(experimentalSlot.load(std::memory_order_acquire)){
+        // Do not hold the observation lock while calling SteamVR.
+        const auto now=observationMs();
+        const auto address=reinterpret_cast<uintptr_t>(receiver);
+        bool authorized=false;
+        {
+            std::lock_guard<std::mutex> guard(observationMutex);
+            authorized=now<experimentalLease.load(std::memory_order_acquire)&&observation.allows(component,address,value);
+        }
+        auto result=authorized?allFingers.forward(original,receiver,component,value,offset,now):
+                               original(receiver,component,value,offset);
+        std::lock_guard<std::mutex> guard(observationMutex);
+        observation.sample(component,address,value,result,observationMs());
+        if(observation.state()==frame_observation::State::RestorePending)
+            experimentalLease.store(0,std::memory_order_release);
+        return result;
+    }
+#endif
 #ifdef FRAME_SCALAR_CANDIDATE_SHADOW
     auto now=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 #ifdef FRAME_SCALAR_ALL_FINGERS_BETA
@@ -96,6 +132,9 @@ class Probe {
     std::function<void(const char*)> log;
     void* page=nullptr;size_t pageSize=0;
     bool attached=false;
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+    bool restartRequired_=false;
+#endif
     std::chrono::steady_clock::time_point deadline{};
     bool protect(bool writable){return mprotect(page,pageSize,PROT_READ|(writable?PROT_WRITE:0))==0;}
     bool readonlyPage(uintptr_t address){
@@ -114,6 +153,9 @@ class Probe {
     }
 public:
     bool active()const{return attached;}
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+    bool restartRequired()const{return restartRequired_;}
+#endif
 #ifdef FRAME_SCALAR_ALL_FINGERS_BETA
     void renewVerifiedObserver(){if(attached)deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);}
 #endif
@@ -125,8 +167,37 @@ public:
         auto set=std::make_shared<ResidentState::TargetSet>();set->handles=next;
         std::atomic_store(&resident.targets,std::move(set));
     }
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+    // Caller must re-run the complete structural classifier and finger census
+    // immediately before calling. Attaching does not permit correction.
+    bool beginObservation(uintptr_t table,uintptr_t entry,uint64_t session,
+                          const frame_observation::Handles& handles,std::function<void(const char*)> logger){
+        if(attached||restartRequired_||!table||!entry||!readonlyPage(table+24))return false;
+        log=std::move(logger);
+        Dl_info self{};
+        if(!dladdr(reinterpret_cast<void*>(&update),&self)||!self.dli_fname||
+           !dlopen(self.dli_fname,RTLD_NOW|RTLD_NOLOAD|RTLD_NODELETE))return false;
+        auto candidate=std::make_unique<frame_scalar::ReadonlySlotTransaction>(
+            reinterpret_cast<uintptr_t*>(table+24),entry,reinterpret_cast<uintptr_t>(&update));
+        {
+            std::lock_guard<std::mutex> guard(observationMutex);
+            if(!observation.start(true,true,session,handles,observationMs()))return false;
+        }
+        resident.original.store(reinterpret_cast<frame_scalar::ScalarUpdate>(entry),std::memory_order_release);
+        experimentalSlot.store(true,std::memory_order_release);
+        transaction=std::move(candidate);
+        const auto result=transaction->install([&](bool writable){return protect(writable);});
+        attached=result==frame_scalar::SlotResult::Changed;
+        if(!attached){stop(result==frame_scalar::SlotResult::ProtectionFailure);return false;}
+        log("FrameCompat: observation attached; all scalar calls pass through");
+        return true;
+    }
+#endif
     bool begin(void* input,unsigned seconds,std::function<void(const char*)> logger){
         log=std::move(logger);
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+        if(restartRequired_||experimentalSlot.load(std::memory_order_acquire))return false;
+#endif
         if(attached||!input||!seconds||seconds>maximumObserverSeconds||!knownExecutableFiles()){
             log("FrameScalarOffProbe: refused duplicate/invalid request or unknown runtime");return false;
         }
@@ -140,6 +211,13 @@ public:
         constexpr auto& fingerprint=frame_compat::scalarFingerprint;
         unsigned char bytes[16]{};
         if(!reader.read(entry,bytes,16)||std::memcmp(bytes,fingerprint,16)||!readonlyPage(table+24))return false;
+#ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
+        {   // Diagnostic only: the v0.1.0 gate above remains the sole decision.
+            auto live=frame_runtime_facts::classifyLive(input);
+            log(frame_runtime_facts::formatVerdict(live.first.verdict==frame_compat_check::Verdict::Known?
+                "known_gate_pass":"known_gate_pass_classifier_disagrees",live.first,live.second,1).c_str());
+        }
+#endif
         Dl_info self{};
         if(!dladdr(reinterpret_cast<void*>(&update),&self)||!self.dli_fname||
            !dlopen(self.dli_fname,RTLD_NOW|RTLD_NOLOAD|RTLD_NODELETE))return false;
@@ -150,7 +228,13 @@ public:
         transaction=std::make_unique<frame_scalar::ReadonlySlotTransaction>(reinterpret_cast<uintptr_t*>(table+24),entry,reinterpret_cast<uintptr_t>(&update));
         auto result=transaction->install([&](bool writable){return protect(writable);});
         attached=result==frame_scalar::SlotResult::Changed;
-        if(!attached){log("FrameScalarOffProbe: attach refused/failed; inspect memory protection before retry");return false;}
+        if(!attached){
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+            // The install may have changed the slot before protection failed.
+            if(result==frame_scalar::SlotResult::ProtectionFailure)stop(true);
+#endif
+            log("FrameScalarOffProbe: attach refused/failed; inspect memory protection before retry");return false;
+        }
         deadline=std::chrono::steady_clock::now()+std::chrono::seconds(seconds);
 #if defined(FRAME_SCALAR_SUPERVISED_ON_CANDIDATE) || defined(FRAME_SCALAR_ALL_FINGERS_BETA)
         log("FrameScalarOffProbe: attached UpdateScalar slot only; supervised trial initially OFF; explicit VR START required");
@@ -159,7 +243,12 @@ public:
 #endif
         return true;
     }
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+    void stop(bool protectionUncertain=false){
+        experimentalLease.store(0,std::memory_order_release);
+#else
     void stop(){
+#endif
 #ifdef FRAME_SCALAR_ALL_FINGERS_BETA
         allFingers.clear();
 #endif
@@ -167,7 +256,14 @@ public:
         shadow.clear();
 #endif
         if(!transaction)return;
+#ifdef FRAME_COMPAT_OBSERVATION_UI
+        auto result=transaction->restoreBounded([&](bool writable){return protect(writable);},protectionUncertain);
+        transaction.reset();
+        attached=false;
+        restartRequired_=result!=frame_scalar::SlotResult::Changed&&result!=frame_scalar::SlotResult::AlreadyOriginal;
+#else
         auto result=transaction->restore([&](bool writable){return protect(writable);});
+#endif
         if(result==frame_scalar::SlotResult::Changed||result==frame_scalar::SlotResult::AlreadyOriginal){
             attached=false;
             if(log)log("FrameScalarOffProbe: original slot restored; module retained for cached/in-flight calls");

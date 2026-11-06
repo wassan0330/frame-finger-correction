@@ -19,8 +19,9 @@ class FingerBank {
   std::atomic<uint64_t> receiver{0},metadataUntil{0},successes{0},failures{0};
   std::mutex samples;
   frame_correction::FingerDeadzone zone;
-  uint64_t settingsRevision=0,lastSample=0,lastLearnUntil=0;
-  float lastRaw=0;bool hasRaw=false;
+  uint64_t settingsRevision=0,lastLearnUntil=0,windowUntil=0,windowRevision=0;
+  std::array<float,63> learningSamples{};
+  unsigned sampleCount=0;
  };
  using Records=std::array<std::shared_ptr<Record>,8>;
  struct Control {
@@ -32,6 +33,16 @@ class FingerBank {
  std::shared_ptr<const Control> control;
  uint64_t epoch=0,lastConfigure=0,lastRenew=0;
  std::atomic<uint64_t> changedCalls{0};
+public:
+ struct LearningResult {unsigned row=0,samples=0;bool applied=false;};
+private:
+ std::optional<LearningResult> learningResult; // control thread only
+ template<class Finger>
+ static frame_correction::DeadzoneSettings settingsFor(const Finger& finger){
+  frame_correction::DeadzoneSettings settings;settings.enabled=finger.selected;settings.manual=finger.threshold;
+  settings.mode=finger.dynamic?frame_correction::DeadzoneMode::Dynamic:frame_correction::DeadzoneMode::Manual;
+  return settings;
+ }
  static bool valid(const Binding& b,unsigned row){
   auto a=frame_scalar::deviceFromContainer(b.scalar.container),c=frame_scalar::deviceFromComponent(b.scalar.component);
   auto hand=row<4?frame_scalar::Hand::Left:frame_scalar::Hand::Right;
@@ -71,20 +82,36 @@ public:
   auto next=std::make_shared<Control>();next->profile=profile;next->on=profile.requested;
   next->issued=now;next->until=authority==Authority::FrameOnly?uiStamp+uiLifetimeMs:std::min(uiStamp+uiLifetimeMs,pcStamp+pcLifetimeMs);next->revision=revision;
   next->learn=learning;next->learnUntil=learnUntil;
-  // cv publishes only when a value changes. On an explicit LEARN request,
-  // seed from the retained PRE-correction value of the same live record, so
-  // holding an extended finger still can learn without manufacturing an update.
+  // Finalize on the control thread, even when no event arrives at the deadline.
+  // Retained raw values are not observations. A failed trial leaves the prior baseline alone.
   auto set=std::atomic_load(&records);
-  if(next->on&&learning>=0&&learnUntil>now&&set){
+  auto previous=std::atomic_load(&control);
+  if(set&&learning>=0){
    auto r=(*set)[static_cast<unsigned>(learning)];
    if(r&&r->enabled.load()&&!r->ambiguous.load()&&r->receiver.load()&&now<r->metadataUntil.load()){
     std::unique_lock<std::mutex> lock(r->samples,std::try_to_lock);
-    if(lock.owns_lock()&&r->hasRaw&&r->lastLearnUntil!=learnUntil){
-     const auto& finger=profile.fingers[static_cast<unsigned>(learning)];
-     if(r->settingsRevision!=revision){r->zone.reset();r->settingsRevision=revision;}
-     frame_correction::DeadzoneSettings settings;settings.enabled=finger.selected;settings.manual=finger.threshold;
-     settings.mode=finger.dynamic?frame_correction::DeadzoneMode::Dynamic:frame_correction::DeadzoneMode::Manual;
-     r->zone.observe(r->lastRaw,.05,true,false,settings);r->lastLearnUntil=learnUntil;
+    if(lock.owns_lock()){
+     auto settings=settingsFor(profile.fingers[static_cast<unsigned>(learning)]);
+     if(r->windowUntil&&(!previous||!previous->on||!next->on||r->windowRevision!=revision||
+                          r->windowUntil!=learnUntil||now>=previous->until)){
+      r->windowUntil=0;r->sampleCount=0;
+     }
+     if(next->on&&settings.enabled&&settings.mode==frame_correction::DeadzoneMode::Dynamic&&
+        learnUntil>now&&r->lastLearnUntil!=learnUntil){
+      r->lastLearnUntil=learnUntil;r->windowUntil=learnUntil;r->windowRevision=revision;r->sampleCount=0;
+     }
+     if(r->windowUntil&&now>=r->windowUntil){
+      bool applied=false;
+      if(r->sampleCount>=3){
+       auto first=r->learningSamples.begin();
+       auto median=first+r->sampleCount/2;
+       std::nth_element(first,median,first+r->sampleCount);
+       if(r->settingsRevision!=revision){r->zone.reset();r->settingsRevision=revision;}
+       applied=r->zone.setLearnedBaseline(*median,settings);
+      }
+      learningResult=LearningResult{static_cast<unsigned>(learning),r->sampleCount,applied};
+      r->windowUntil=0;r->sampleCount=0;
+     }
     }
    }
   }
@@ -94,6 +121,7 @@ public:
                       uint64_t uiStamp,uint64_t now,int learning=-1,uint64_t learnUntil=0){
   return renew(profile,revision,verifiedRuntime,uiStamp,0,now,learning,learnUntil,Authority::FrameOnly);
  }
+ std::optional<LearningResult> takeLearningResult(){auto result=learningResult;learningResult.reset();return result;}
  struct Status {unsigned present=0,witnessed=0,learned=0;bool on=false;uint64_t changed=0;};
  Status status(uint64_t now){
   Status out;out.changed=changedCalls.load();auto c=std::atomic_load(&control);
@@ -115,22 +143,25 @@ public:
   const auto witnessed=record->receiver.load();float output=input;
   std::unique_lock<std::mutex> lock(record->samples,std::try_to_lock);
   if(lock.owns_lock()){
-   record->lastRaw=input;record->hasRaw=true;
    if(c&&record->settingsRevision!=c->revision){record->zone.reset();record->settingsRevision=c->revision;}
    if(c&&c->on&&now>=c->issued&&now<c->until&&now<record->metadataUntil.load()&&witnessed==address){
-    const auto& finger=c->profile.fingers[row];
-    frame_correction::DeadzoneSettings settings;settings.enabled=finger.selected;settings.manual=finger.threshold;
-    settings.mode=finger.dynamic?frame_correction::DeadzoneMode::Dynamic:frame_correction::DeadzoneMode::Manual;
-    double dt=record->lastSample&&now>record->lastSample?double(now-record->lastSample)/1000.:.01;
-    if(c->learn==static_cast<int>(row)&&now<c->learnUntil)record->zone.observe(input,dt,true,false,settings);
+    auto settings=settingsFor(c->profile.fingers[row]);
     output=static_cast<float>(record->zone.map(input,settings));
    }
-   record->lastSample=now;
   }
   // A replaced/disconnected record is invalidated before its successor publishes.
   if(!record->enabled.load())output=input;
   if(output!=input)changedCalls.fetch_add(1,std::memory_order_relaxed);
   const auto result=original(receiver,component,output,offset);
+  if(result==0&&witnessed==address&&c&&c->on&&c->learn==static_cast<int>(row)&&
+     now>=c->issued&&now<c->until&&now<c->learnUntil&&now<record->metadataUntil.load()&&
+     record->enabled.load()&&!record->ambiguous.load()){
+   auto settings=settingsFor(c->profile.fingers[row]);
+   if(lock.owns_lock()&&settings.enabled&&settings.mode==frame_correction::DeadzoneMode::Dynamic&&
+      input<=settings.maximum&&record->windowUntil==c->learnUntil&&record->windowRevision==c->revision&&
+      record->sampleCount<record->learningSamples.size())
+    record->learningSamples[record->sampleCount++]=input;
+  }
   if(result==0&&record->enabled.load()){
    record->successes.fetch_add(1,std::memory_order_relaxed);uint64_t expected=0;
    if(!record->receiver.compare_exchange_strong(expected,address)&&expected!=address)record->ambiguous.store(true);
