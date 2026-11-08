@@ -1,3 +1,4 @@
+#include <limits>
 #include <pwd.h>
 #if defined(FRAME_COMPAT_OBSERVATION_UI) && (!defined(FRAME_COMPAT_STRUCTURAL_AUDIT) || !defined(FRAME_SCALAR_STANDALONE_BETA) || !defined(FRAME_SCALAR_ALL_FINGERS_BETA) || !defined(FRAME_SCALAR_OFF_VTABLE_PROBE))
 #error Experimental observation requires the standalone structural-audit build
@@ -365,8 +366,10 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
         return {serial,role};
     }
 #ifdef FRAME_COMPAT_STRUCTURAL_AUDIT
-    // Unknown layout: read-only structural audit, at most once per second for
-    // 12 attempts per provider. It never sets `backend`, so none of the
+    // Unknown layout: read-only structural audit, at most once per second.
+    // Wait for controller readiness without a deadline; no hooks are installed.
+    // Structural errors reject immediately; attachment attempts remain bounded.
+    // It never sets `backend`, so none of the
     // observer/correction paths below can run; it only logs a verdict.
     void* structuralInput=nullptr;
     unsigned structuralAttempts=0;bool structuralDone=false,structuralHashed=false;
@@ -536,10 +539,15 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
         // Follow the backend pointer only after the checks that vouch for it.
         if(frame_compat_check::structuralCheck(f,vouched)==frame_compat_check::Reason::None)structuralCensus(f);
         auto result=frame_compat_check::classify(f,frame_runtime_facts::shippedProfiles());
-        ++structuralAttempts;
+        if(structuralAttempts<std::numeric_limits<unsigned>::max())++structuralAttempts;
         using frame_compat_check::Reason;
         const bool waiting=result.reason==Reason::CensusMissing||result.reason==Reason::CensusUnstable||result.reason==Reason::FingerMissing;
-        if(result.verdict==frame_compat_check::Verdict::Rejected&&waiting&&structuralAttempts<12)return;
+        if(result.verdict==frame_compat_check::Verdict::Rejected&&waiting){
+#if defined(FRAME_COMPAT_OBSERVATION_UI) && defined(FRAME_SCALAR_ALL_FINGERS_BETA)
+            structuralStatus="waiting none";publish();
+#endif
+            return;
+        }
         structuralDone=true;
 #if defined(FRAME_COMPAT_OBSERVATION_UI) && defined(FRAME_SCALAR_ALL_FINGERS_BETA)
         structuralStatus=std::string(frame_runtime_facts::verdictName(result.verdict))+" "+frame_compat_check::reasonName(result.reason);
@@ -779,7 +787,7 @@ public:
                 error=vr::VRInitError_None;
                 auto* serverHost=static_cast<vr::IVRServerDriverHost*>(context->GetGenericInterface(vr::IVRServerDriverHost_Version,&error));
                 logger=log;properties=props;host=error==vr::VRInitError_None?serverHost:nullptr;structuralInput=input;
-                emit("FrameCompat: layout not known; read-only structural audit scheduled (max 12 attempts); no hooks; correction OFF");
+                emit("FrameCompat: layout not known; read-only structural audit scheduled (waiting for controllers; no readiness deadline); no hooks; correction OFF");
             }
         }
 #endif

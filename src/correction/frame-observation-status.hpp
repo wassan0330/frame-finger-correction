@@ -22,7 +22,7 @@ inline DiagnosticStatus parseDiagnosticStatus(const std::string& text, int64_t n
         if(result.witnessed>255||(result.verdict!="observing"&&result.witnessed!=255))return {};
         return result;
     }
-    if(result.verdict=="stopped"&&result.reason=="none")return result;
+    if((result.verdict=="stopped"||result.verdict=="waiting")&&result.reason=="none")return result;
     if (result.verdict!="structurally_compatible" && result.verdict!="rejected" &&
         !(result.verdict=="restore_failed" && result.reason=="restart_required")) return {};
     if (result.reason.empty() || result.reason.size()>48 ||

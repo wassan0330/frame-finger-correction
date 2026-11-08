@@ -26,6 +26,16 @@ if sh "$bootstrap" "$url" "$(printf '%064d' 0)"; then
     exit 1
 fi
 test ! -e "$root"
+if sh "$bootstrap" "$url" "$hash" --experimental; then
+    echo "Experimental installation without driver unexpectedly accepted" >&2
+    exit 1
+fi
+test ! -e "$root"
+if sh "$bootstrap" "$url" "$hash" --force; then
+    echo "Unknown option unexpectedly accepted" >&2
+    exit 1
+fi
+test ! -e "$root"
 sh "$bootstrap" "$url" "$hash"
 generation=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["current"])' "$root/selection.json")
 python3 "$root/releases/$generation/launch-frame-release.py" --check --check-home "$HOME"

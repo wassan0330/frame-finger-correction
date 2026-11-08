@@ -2,6 +2,9 @@
 #include <cassert>
 using frame_observation::parseDiagnosticStatus;
 int main() {
+    assert(parseDiagnosticStatus("FRAME_COMPAT_STATUS_1 10 waiting none",12).verdict=="waiting");
+    assert(parseDiagnosticStatus("FRAME_COMPAT_STATUS_1 10 waiting bad",12).verdict.empty());
+    assert(parseDiagnosticStatus("FRAME_COMPAT_STATUS_1 10 waiting none",14).verdict.empty());
     assert(parseDiagnosticStatus("FRAME_COMPAT_STATUS_1 10 structurally_compatible none",12).verdict=="structurally_compatible");
     assert(parseDiagnosticStatus("FRAME_COMPAT_STATUS_1 10 rejected finger_missing",13).reason=="finger_missing");
     assert(parseDiagnosticStatus("FRAME_COMPAT_STATUS_1 10 rejected finger_missing",14).verdict.empty());

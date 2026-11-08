@@ -1,12 +1,12 @@
 #!/bin/sh
 # Bootstrap for a pinned Frame Finger Correction release archive.
 set -eu
-if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
-    echo "Usage: sh install-frame-release.sh <release-archive-https-url> <sha256> [--dashboard] [--driver]" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 5 ]; then
+    echo "Usage: sh install-frame-release.sh <release-archive-https-url> <sha256> [--dashboard] [--driver] [--experimental]" >&2
     exit 2
 fi
-for option in "${3:-}" "${4:-}"; do
-    case "$option" in ""|--dashboard|--driver) ;; *) echo "Unknown option: $option" >&2; exit 2;; esac
+for option in "${3:-}" "${4:-}" "${5:-}"; do
+    case "$option" in ""|--dashboard|--driver|--experimental) ;; *) echo "Unknown option: $option" >&2; exit 2;; esac
 done
 case "$1" in https://*) ;; *) echo "HTTPS required" >&2; exit 2;; esac
 case "$(uname -s):$(uname -m)" in Linux:aarch64) ;; *) echo "Steam Frame ARM64 required" >&2; exit 2;; esac
