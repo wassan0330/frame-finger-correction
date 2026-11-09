@@ -419,7 +419,7 @@ int main(int argc,char** argv){
 #ifdef FRAME_UI_ALL_FINGERS_BETA
 #ifdef FRAME_COMPAT_OBSERVATION_UI
             if(compatVerdict=="observing")
-                text(cr,25,600,18,japanese?"\u691c\u8a3c\u4e2d\uff1a\u5de6\u53f3\u306e\u6307\u3092\u66f2\u3052\u4f38\u3070\u3057\u3057\u3066\u304f\u3060\u3055\u3044 (\u88dc\u6b63OFF)":"Checking: flex both hands (correction OFF)");
+                text(cr,25,600,18,japanese?"\u5165\u529b\u7d4c\u8def\u3092\u81ea\u52d5\u78ba\u8a8d\u4e2d (\u88dc\u6b63OFF)":"Checking input route automatically (correction OFF)");
             else
 #endif
             text(cr,25,600,18,"DYNAMIC: extend the selected finger, click LEARN, hold 1.5s. No automatic learning.");
@@ -434,8 +434,8 @@ int main(int argc,char** argv){
             button(25,690,540,105,autoLaunch?"STEAMVR AUTO-START: ON":"STEAMVR AUTO-START: OFF");
 #ifdef FRAME_COMPAT_OBSERVATION_UI
             if(compatVerdict=="waiting")text(cr,25,765,20,japanese?"Controller\u306e\u63a5\u7d9a\u30fb\u5165\u529b\u6e96\u5099\u3092\u5f85\u3063\u3066\u3044\u307e\u3059 (\u88dc\u6b63OFF)":"Waiting for controller inputs (correction OFF)");
-            else if(compatVerdict=="observing")text(cr,25,765,20,japanese?"観測中：入力は変更していません":"Observing: input unchanged");
-            else if(compatVerdict=="verified")text(cr,25,765,20,japanese?"8指を確認：補正設定に従って動作します":"Eight fingers verified: following correction setting");
+            else if(compatVerdict=="observing")text(cr,25,765,20,japanese?"通常入力を待っています。準備動作は不要です（補正OFF）":"Waiting for normal input; no preparation needed (correction OFF)");
+            else if(compatVerdict=="verified")text(cr,25,765,20,japanese?"入力経路を確認：補正設定に従って動作します":"Input route verified: following correction setting");
             else if(compatVerdict=="active")text(cr,25,765,20,profile.requested?(japanese?"構造検証済み：補正オン":"Structurally verified: correction ON"):(japanese?"構造検証済み：補正オフ":"Structurally verified: correction OFF"));
             else if(compatVerdict=="stopped")text(cr,25,765,20,japanese?"停止・復元済み":"Stopped: slot restored");
             else if(compatLine=="restart_required")text(cr,25,765,20,japanese?"\u5fa9\u5143\u672a\u78ba\u8a8d\uff1aSteamVR\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044":"Restore unconfirmed: restart SteamVR");

@@ -91,8 +91,9 @@ inline int32_t update(void* receiver,uint64_t component,float value,double offse
             std::lock_guard<std::mutex> guard(observationMutex);
             authorized=now<experimentalLease.load(std::memory_order_acquire)&&observation.allows(component,address,value);
         }
-        auto result=authorized?allFingers.forward(original,receiver,component,value,offset,now):
-                               original(receiver,component,value,offset);
+        // False records this real call's receiver/result but never changes its
+        // value or learns a baseline. No synthetic input and no replay.
+        auto result=allFingers.forward(original,receiver,component,value,offset,now,authorized);
         std::lock_guard<std::mutex> guard(observationMutex);
         observation.sample(component,address,value,result,observationMs());
         if(observation.state()==frame_observation::State::RestorePending)

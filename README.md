@@ -13,19 +13,19 @@ Steam Frameのコントローラーで、指を伸ばしてもアバターの指
 
 ## 対応環境
 
-Steam FrameのLinux ARM64版が対象です。v0.3.0はプレビュー版です。1台のFrameで、2026年11月8日の更新後のSteamVRベータに対し、未知ビルドの構造検証・左右8指の観測・VRChatでの補正効果を確認しました。すべての個体や将来のSteamVRビルドでの動作を保証するものではありません。
+Steam FrameのLinux ARM64版が対象です。v0.3.1はプレビュー版です。1台のFrameで、2026年11月8日の更新後のSteamVRベータに対する補正効果を確認しました。11月9日には今回の修正版で、保存済みONから準備操作なしの自動検証・左右8指の補正ONまで進むことをログで確認しました。すべての個体や将来のSteamVRビルドでの動作を保証するものではありません。
 
 | 判定 | 動作 |
 | --- | --- |
 | 既知ビルド | 従来の固定ハッシュ・配置検証を通したうえで、保存したON/OFF設定に従います。 |
-| 未知ビルドで構造検証合格 | 通常の補正ON操作または保存済みON設定により、入力値を変えない観測を自動実行します。左右8指の検証後に補正を開始します。 |
+| 未知ビルドで構造検証合格 | 通常の補正ON操作または保存済みON設定により、通常入力から経路を自動検証します。確認できた指から補正を開始し、全指の入力は待ちません。 |
 | 検証失敗 | 補正を有効にせず、画面に理由を表示します。強制有効化はできません。 |
 
-Controllerの接続・入力準備は時間切れなく待ちます。未知ビルドで補正ONにした後、観測中の案内が出たら左右の4指をゆっくり曲げ伸ばししてください。観測は最大15秒で、完了までは補正OFFです。補正ONと表示されるボタンは希望設定であり、実際の動作は画面下の状態表示で確認してください。
+Controllerの接続・入力準備は時間切れなく待ちます。起動時に指を開いたり、曲げ伸ばししたりする準備は不要です。未知ビルドでは各指の最初の通常入力を変更せずに通し、呼び出し先・値・戻り値を確認してから補正します。入力値の変化や全指の同時確認は要求しません。通常入力が届かない間は、その指だけ補正せずに待ちます。補正ONと表示されるボタンは希望設定であり、実際の動作は画面下の状態表示で確認してください。
 
 ## インストール・更新
 
-1. [v0.3.0のリリースページ](https://github.com/wassan0330/frame-finger-correction/releases/tag/app-v0.3.0)を開きます。
+1. [v0.3.1のリリースページ](https://github.com/wassan0330/frame-finger-correction/releases/tag/app-v0.3.1)を開きます。
 2. **既存版からの更新時は先にアプリを閉じ、設定を残して旧版をアンインストール**してください。配布アーカイブを展開したフォルダで `python3 stage-frame-release.py uninstall` を実行します。`--purge` は付けません。既存ドライバーへ重ねて導入する操作は拒否されます。
 3. Frame側SteamVRが動作している状態で、デスクトップモードのKonsoleからリリースページの1行コマンドを実行します。sudoは不要です。
 4. Frame側SteamVRを通常再起動します。
@@ -49,8 +49,8 @@ Controllerの接続・入力準備は時間切れなく待ちます。未知ビ�
 | --- | --- |
 | ダッシュボードに見当たらない | 「＋」→「プログラムを起動」から開きます。 |
 | 接続・入力準備待ち | 両Controllerを接続してください。接続待ちの時間制限はありません。 |
-| 検証中 | 左右の人差し指・中指・薬指・小指をゆっくり曲げ伸ばししてください。完了まで補正されません。 |
-| 未対応・timeoutと表示 | 理由を記録してください。検証の再試行はFrame側SteamVRの通常再起動後に行います。無限の再接続試行はしません。 |
+| 経路確認中 | 通常どおり使用してください。準備動作は不要です。確認できた指から補正します。 |
+| 未対応・復元未確認と表示 | 理由を記録してください。検証の再試行はFrame側SteamVRの通常再起動後に行います。無限の再接続試行はしません。 |
 | 補正ONだが入力はOFF | 希望設定と実際の状態は別です。画面下の検証結果・状態を確認してください。 |
 | 指を曲げにくい | 対象指のデッドゾーンを下げるか、補正対象から外します。 |
 | 入力がおかしい・復元未確認 | 補正OFFにしてアプリを閉じます。改善しない場合や再起動の案内が出た場合は、Frame側SteamVRを通常再起動してください。 |
@@ -68,7 +68,7 @@ Controllerの接続・入力準備は時間切れなく待ちます。未知ビ�
 
 ## ソースからビルド
 
-v0.3.0のタグ、またはAssetsの `frame-finger-correction-v0.3.0-source.tar.gz` を使います。古いv0.1.0の自動生成Source codeはREADMEのみだったため、v0.1.0の再ビルドには同リリースに添付したソースを使用してください。
+v0.3.1のタグ、またはAssetsの `frame-finger-correction-v0.3.1-source.tar.gz` を使います。古いv0.1.0の自動生成Source codeはREADMEのみだったため、v0.1.0の再ビルドには同リリースに添付したソースを使用してください。
 
 Frame上のC++17コンパイラ、Python 3.11以上、Cairoの開発ファイルとpkg-config、Valve OpenVRヘッダーとARM64ランタイムが必要です。既定ではヘッダーを `/opt/steamvr/tools/hellovr_vulkan_linux/src/openvr/headers`、ランタイムを `/opt/steamvr/bin/linuxarm64` から参照します。必要に応じて `STEAMVR_ROOT` / `OPENVR_HEADERS` を指定します。
 
@@ -76,7 +76,7 @@ Frame上のC++17コンパイラ、Python 3.11以上、Cairoの開発ファイル
 FRAME_FINGER_RELEASE=1 FRAME_FINGER_RUNTIME=november-beta \
 FRAME_COMPAT_STRUCTURAL_AUDIT=1 FRAME_COMPAT_OBSERVATION_UI=1 \
 sh scripts/build-frame-finger.sh build/frame-finger
-python3 scripts/package-frame-runtime-candidate.py build/frame-finger frame-finger-correction-v0.3.0-arm64.tar.gz
+python3 scripts/package-frame-runtime-candidate.py build/frame-finger frame-finger-correction-v0.3.1-arm64.tar.gz
 ```
 
 テストは `python3 scripts/run-tests.py` で実行します。[テスト記録](docs/testing.md)も参照してください。自作部分は[MITライセンス](LICENSE)、同梱のValve OpenVRヘッダーは[個別のライセンス](third_party/openvr-driver/LICENSE)に従います。

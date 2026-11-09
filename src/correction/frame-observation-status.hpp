@@ -19,7 +19,7 @@ inline DiagnosticStatus parseDiagnosticStatus(const std::string& text, int64_t n
             if(digit<'0'||digit>'9')return {};
             result.witnessed=result.witnessed*10+unsigned(digit-'0');
         }
-        if(result.witnessed>255||(result.verdict!="observing"&&result.witnessed!=255))return {};
+        if(result.witnessed>255||(result.verdict!="observing"&&result.witnessed==0))return {};
         return result;
     }
     if((result.verdict=="stopped"||result.verdict=="waiting")&&result.reason=="none")return result;

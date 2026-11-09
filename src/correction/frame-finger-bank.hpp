@@ -133,18 +133,19 @@ public:
    if(lock.owns_lock()&&c&&r->settingsRevision==c->revision&&r->zone.ready())out.learned|=1u<<i;
   }return out;
  }
- int32_t forward(frame_scalar::ScalarUpdate original,void* receiver,uint64_t component,float input,double offset,uint64_t now){
+ int32_t forward(frame_scalar::ScalarUpdate original,void* receiver,uint64_t component,float input,double offset,uint64_t now,bool allowCorrection=true){
   auto set=std::atomic_load(&records);auto c=std::atomic_load(&control);
   std::shared_ptr<Record> record;unsigned row=0;
   if(set)for(unsigned i=0;i<8;++i)if((*set)[i]&&(*set)[i]->binding.scalar.component==component){record=(*set)[i];row=i;break;}
   if(!record||!record->enabled.load()||record->ambiguous.load()||!receiver||!std::isfinite(input)||input<0||input>1)
    return original(receiver,component,input,offset);
+  // Observation records only real successful calls; false cannot map or learn.
   const auto address=reinterpret_cast<uintptr_t>(receiver);
   const auto witnessed=record->receiver.load();float output=input;
   std::unique_lock<std::mutex> lock(record->samples,std::try_to_lock);
   if(lock.owns_lock()){
    if(c&&record->settingsRevision!=c->revision){record->zone.reset();record->settingsRevision=c->revision;}
-   if(c&&c->on&&now>=c->issued&&now<c->until&&now<record->metadataUntil.load()&&witnessed==address){
+   if(allowCorrection&&c&&c->on&&now>=c->issued&&now<c->until&&now<record->metadataUntil.load()&&witnessed==address){
     auto settings=settingsFor(c->profile.fingers[row]);
     output=static_cast<float>(record->zone.map(input,settings));
    }
@@ -153,7 +154,7 @@ public:
   if(!record->enabled.load())output=input;
   if(output!=input)changedCalls.fetch_add(1,std::memory_order_relaxed);
   const auto result=original(receiver,component,output,offset);
-  if(result==0&&witnessed==address&&c&&c->on&&c->learn==static_cast<int>(row)&&
+  if(allowCorrection&&result==0&&witnessed==address&&c&&c->on&&c->learn==static_cast<int>(row)&&
      now>=c->issued&&now<c->until&&now<c->learnUntil&&now<record->metadataUntil.load()&&
      record->enabled.load()&&!record->ambiguous.load()){
    auto settings=settingsFor(c->profile.fingers[row]);

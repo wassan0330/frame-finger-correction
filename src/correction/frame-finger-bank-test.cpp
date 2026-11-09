@@ -71,6 +71,22 @@ int main(){
  standalone.forward(original,receiver,live[0]->scalar.component,.1f,0,1002);assert(received==0);
  assert(!standalone.renewStandalone(all,1,false,1000,1002));
  assert(!standalone.renewStandalone(all,1,true,1000,2600));
+ // Route observation may prime receivers, but must never map or learn.
+ FingerBank rawOnly;live=bindings();rawOnly.configure(live,4000);
+ frame_settings::Profile rawProfile;rawProfile.requested=true;
+ for(auto& f:rawProfile.fingers)f={true,false,.2};
+ assert(rawOnly.renewStandalone(rawProfile,1,true,4000,4000));
+ rawOnly.forward(original,receiver,live[0]->scalar.component,.1f,0,4001,false);assert(received==.1f);
+ rawOnly.forward(original,receiver,live[0]->scalar.component,.1f,0,4002,false);assert(received==.1f);
+ assert(rawOnly.status(4002).changed==0);
+ rawOnly.forward(original,receiver,live[0]->scalar.component,.1f,0,4003);assert(received==0);
+ rawProfile.fingers[0].dynamic=true;
+ assert(rawOnly.renewStandalone(rawProfile,2,true,4010,4010,0,4020));
+ for(uint64_t now=4011;now<4015;++now){
+  rawOnly.forward(original,receiver,live[0]->scalar.component,.6f,0,now,false);assert(received==.6f);
+ }
+ assert(rawOnly.renewStandalone(rawProfile,2,true,4020,4020,0,4020));
+ auto noLearning=rawOnly.takeLearningResult();assert(noLearning&&!noLearning->applied&&noLearning->samples==0);
  std::puts("PASS standalone authority: no PC proof, runtime required, UI expiry enforced");
  std::puts("PASS simulated1h continuous all8 renewal; physical trigger/value excluded");
  std::puts("PASS all8 bank: both hands/all fingers, manual selection, explicit dynamic learning, unrelated bypass, repeat ON/OFF, metadata expiry, disconnect and clock regression");

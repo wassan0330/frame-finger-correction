@@ -451,7 +451,8 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
                 structuralStatus=std::string("rejected ")+frame_compat_check::reasonName(reason);
                 return;
             }
-            structuralCensus(facts,&experimentalHandles,&experimentalOwners);
+            std::array<std::optional<frame_beta::Binding>,8> initialBindings{};
+            structuralCensus(facts,&experimentalHandles,&experimentalOwners,&initialBindings);
             const auto verdict=frame_compat_check::classify(facts,frame_runtime_facts::shippedProfiles());
             if(verdict.verdict!=frame_compat_check::Verdict::StructurallyCompatible){
                 structuralStatus=std::string("rejected ")+frame_compat_check::reasonName(verdict.reason);
@@ -467,6 +468,8 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
             }
             experimentalTable=facts.table;experimentalEntry=facts.slots[3];experimentalBackend=facts.backend;
             experimentalUi=ui.session;
+            frame_off_probe::allFingers.off();
+            frame_off_probe::allFingers.configure(initialBindings,atAttach);
             if(offProbe.beginObservation(experimentalTable,experimentalEntry,experimentalUi,experimentalHandles,log))
                 structuralStatus="observing 0";
             else structuralStatus=offProbe.restartRequired()?"restore_failed restart_required":"rejected attach_failed";
@@ -507,13 +510,15 @@ class Provider final:public vr::IServerTrackedDeviceProvider {
             if(logger)logger->Log(("FrameCompat: "+structuralStatus).c_str());
             std::lock_guard<std::mutex> guard(frame_off_probe::observationMutex);
             frame_off_probe::observation.restored(!offProbe.restartRequired(),false);
-        }else if(enabled){
+        }else{
             auto tick=frame_off_probe::observationMs();
             frame_off_probe::allFingers.configure(bindings,tick);
-            uiFresh=fresh;
-            evaluateBeta(ui,frame_supervision::PcOffProof{},tick);
-            frame_off_probe::experimentalLease.store(ui.observedMs+1500,std::memory_order_release);
-            publishBeta(tick);
+            if(enabled){
+                uiFresh=fresh;
+                evaluateBeta(ui,frame_supervision::PcOffProof{},tick);
+                frame_off_probe::experimentalLease.store(ui.observedMs+1500,std::memory_order_release);
+                publishBeta(tick);
+            }else frame_off_probe::allFingers.off();
         }
     }
 #endif
